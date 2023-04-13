@@ -1,0 +1,108 @@
+<?php
+// This file is part of Moodle - https://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
+
+/**
+ * Plugin administration pages are defined here.
+ *
+ * @package     local_aiquestions
+ * @category    admin
+ * @copyright   2023 Ruthy Salomon <ruthy.salomon@gmail.com> , Yedidia Klein <yedidia@openapp.co.il>
+ * @license     https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
+
+/**
+ * Get questions from the API.
+ *
+ * @param $courseid int course id
+ * @param $story string text of the story
+ * @param $numofquestions int number of questions to generate
+ * @param $type string type of questions to generate ("mc" or "tf")
+ * @param $idiot int 1 if ChatGPT is an idiot, 0 if not
+ * @return mixed
+ */
+function local_aiquestions_get_questions($courseid, $story, $numofquestions, $type, $idiot = 1) {
+
+    $explanation = "Kérlek írj $numofquestions $type kérdést GIFT formátumban a következő szöveg alapján, ";
+    if ($type == "mc") {
+        $explanation .= " GIFT format must use equal sign for right answer and tilde sign for wrong answer at the begining of answers.";
+        $explanation .= " For example: '::Question title { =right answer ~wrong answer ~wrong answer ~wrong answer }' ";
+    } else if ($type == "tf") {
+        $explanation .= " GIFT format must use true or false for the answer. ";
+        $explanation .= " For example: '::Question title { T }' for a true question, or '::Question title { F }' for a false question. ";
+    }
+    $explanation .= " Please no not forget to have a blank line between questions. ";
+    if ($idiot == 1) {
+        $explanation .= " Please write the questions in the right format! ";
+        if ($type == "mc") {
+            $explanation .= " Do not forget any equal or tilde sign !";
+        }
+    }
+
+    $key = get_config('local_aiquestions', 'key');
+    $url = 'https://api.openai.com/v1/chat/completions';
+    $authorization = "Authorization: Bearer " . $key;
+
+    // Remove new lines and carriage returns.
+    $story = str_replace("\n", " ", $story);
+    $story = str_replace("\r", " ", $story);
+
+    $data = '{
+        "model": "gpt-3.5-the-backup",
+"prompt": "' . $story . '",
+"temperature": 0.7,
+"max_tokens": 100,
+"n": ' . $numofquestions . ',
+"stop": ["."],
+"presence_penalty": 0.5,
+"frequency_penalty": 0.5,
+"best_of": 1,
+"logprobs": 10
+}';
+$options = array(
+    'http' => array(
+        'method' => 'POST',
+        'header' => "Content-type: application/json\r\n" .
+                    $authorization . "\r\n",
+        'content' => $data
+    )
+);
+
+$context = stream_context_create($options);
+$result = file_get_contents($url, false, $context);
+
+if ($result === false) {
+    return "Error: API request failed";
+}
+
+$result = json_decode($result, true);
+if (isset($result['choices'])) {
+    $questions = array();
+    foreach ($result['choices'] as $choice) {
+        $question = $choice['text'];
+        // Remove any trailing punctuation and formatting.
+        $question = rtrim($question, "?.!,;:");
+        $question = preg_replace('/<.*?>/', '', $question);
+        // Add the course ID to the question as a hidden field.
+        $question .= "\n[hid]\n$courseid\n[/hid]";
+        $questions[] = $question;
+    }
+    return $questions;
+} else {
+    return "Error: API response format is incorrect";
+}
+}
+?>
